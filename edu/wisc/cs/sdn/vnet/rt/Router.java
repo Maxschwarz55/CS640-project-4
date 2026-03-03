@@ -6,6 +6,7 @@ import edu.wisc.cs.sdn.vnet.Device;
 import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
 
+import net.floodlightcontroller.packet.MACAddress;
 import net.floodlightcontroller.packet.Ethernet;
 
 /**
@@ -107,7 +108,7 @@ public class Router extends Device {
 		bb.putInt(packet.getDestinationAddress());
 		if (packet.getOptions() != null)
 			bb.put(packet.getOptions());
-
+        bb.rewind();
 		int accumulation = 0;
 		for (int i = 0; i < packet.getHeaderLength() * 2; ++i) {
 			accumulation += 0xffff & bb.getShort();
@@ -130,9 +131,29 @@ public class Router extends Device {
 		}
 		packet.setTtl((byte) (ttl - 1));
 
-		// Lookup dest
-		// TODO
+        int destAddr = packet.getDestinationAddress();     
+        RouteEntry tableMatch = routeTable.lookup(destAddr);
+        if (tableMatch == null) {
+            System.out.println(
+                    "*** -> Destination address not found, packet dropped: " + etherPacket.toString().replace("\n", "\n\t"));
+            return;
+        }
+        
+        int nextHopAddr = tableMatch.getGatewayAddress();
+        if (nextHopAddr == 0) {
+            nextHopAddr = destAddr;
+        }
+        MACAddress tableMatchMACAddr = arpCache.lookup(nextHopAddr).getMac();
+        if (tableMatch == null) {
+            System.out.println("*** -> No route found, dropping");
+            return;
+        }
+        etherPacket.setDestinationMACAddress(tableMatchMACAddr.toBytes());
+        Iface outgoingIface = tableMatch.getInterface();
+        etherPacket.setSourceMACAddress(outgoingIface.getMacAddress().toBytes());
+        
+        this.sendPacket(etherPacket, outgoingIface);
 
-		/********************************************************************/
 	}
 }
+

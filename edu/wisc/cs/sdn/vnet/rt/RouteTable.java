@@ -33,19 +33,28 @@ public class RouteTable
 	 * @param ip IP address
 	 * @return the matching route entry, null if none exists
 	 */
-	public RouteEntry lookup(int ip)
-	{
-		synchronized(this.entries)
-		{
-			/*****************************************************************/
-			/* TODO: Find the route entry with the longest prefix match	  */
-			
-			return null;
-			
-			/*****************************************************************/
-		}
-	}
-	
+    public RouteEntry lookup(int ip) {
+        synchronized(this.entries) {
+            RouteEntry longestMatch = null;
+            int longestMatchLen = 0;
+
+            for (RouteEntry entry : this.entries) {
+                int mask = entry.getMaskAddress();
+                int dest = entry.getDestinationAddress();
+
+                // Check if ip matches this entry's network
+                if ((ip & mask) == (dest & mask)) {
+                    // Count bits in mask to determine prefix length
+                    int maskLen = Integer.bitCount(mask);
+                    if (maskLen > longestMatchLen) {
+                        longestMatchLen = maskLen;
+                        longestMatch = entry;
+                    }
+                }
+            }
+            return longestMatch;
+        }
+    }
 	/**
 	 * Populate the route table from a file.
 	 * @param filename name of the file containing the static route table
