@@ -21,6 +21,12 @@ public class RouteEntry
 	/** Router interface out which packets should be sent to reach
 	 * the destination or gateway */
 	private Iface iface;
+
+	/** Metric for the route (distance) */
+	private int metric;
+
+	/** Timestamp when this route entry was last updated */
+	private long timestamp;
 	
 	/**
 	 * Create a new route table entry.
@@ -31,12 +37,14 @@ public class RouteEntry
 	 *        be sent to reach the destination or gateway
 	 */
 	public RouteEntry(int destinationAddress, int gatewayAddress, 
-			int maskAddress, Iface iface)
+			int maskAddress, Iface iface, int metric, long timestamp)
 	{
 		this.destinationAddress = destinationAddress;
 		this.gatewayAddress = gatewayAddress;
 		this.maskAddress = maskAddress;
 		this.iface = iface;
+		this.metric = metric;
+		this.timestamp = timestamp;
 	}
 	
 	/**
@@ -69,6 +77,30 @@ public class RouteEntry
 
 	public void setInterface(Iface iface)
 	{ this.iface = iface; }
+
+	/**
+	 * @return the metric for this route
+	 */
+	public int getMetric()
+	{ return this.metric; }
+
+	/**
+	 * @param metric the new metric for this route
+	 */
+	public void setMetric(int metric)
+	{ this.metric = metric; }
+
+	/**
+	 * @return the timestamp when this route was last updated
+	 */
+	public long getTimestamp()
+	{ return this.timestamp; }
+
+	/**
+	 * Set the timestamp for this route to the current time
+	 */
+	public void setTimestamp(long timestamp)
+	{ this.timestamp = timestamp; }
 	
 	public String toString()
 	{

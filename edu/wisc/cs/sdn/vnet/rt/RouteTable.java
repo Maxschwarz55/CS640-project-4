@@ -27,6 +27,14 @@ public class RouteTable
 	 */
 	public RouteTable()
 	{ this.entries = new LinkedList<RouteEntry>(); }
+
+	public void clear()
+	{
+		synchronized(this.entries)
+		{
+			this.entries.clear();
+		}
+	}
 	
 	/**
 	 * Lookup the route entry that matches a given IP address.
@@ -154,13 +162,18 @@ public class RouteTable
 	 * @param iface router interface out which to send packets to reach the 
 	 *		destination or gateway
 	 */
-	public void insert(int dstIp, int gwIp, int maskIp, Iface iface)
+	public void insert(int dstIp, int gwIp, int maskIp, Iface iface, int metric, long timestamp)
 	{
-		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface);
+		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface, metric, timestamp);
 		synchronized(this.entries)
 		{ 
 			this.entries.add(entry);
 		}
+	}
+
+	public void insert(int dstIp, int gwIp, int maskIp, Iface iface)
+	{
+		insert(dstIp, gwIp, maskIp, iface, 1, System.currentTimeMillis());
 	}
 	
 	/**
@@ -188,7 +201,7 @@ public class RouteTable
 	 * @param iface new router interface for matching entry
 	 * @return true if a matching entry was found and updated, otherwise false
 	 */
-	public boolean update(int dstIp, int maskIp, int gwIp, Iface iface)
+	public boolean update(int dstIp, int maskIp, int gwIp, Iface iface, int metric, long timestamp)
 	{
 		synchronized(this.entries)
 		{
@@ -196,8 +209,14 @@ public class RouteTable
 			if (null == entry) { return false; }
 			entry.setGatewayAddress(gwIp);
 			entry.setInterface(iface);
+			entry.setMetric(metric);
+			entry.setTimestamp(timestamp);
 		}
 		return true;
+	}
+
+	public List<RouteEntry> getEntries() {
+		return this.entries;
 	}
 
 	/**
