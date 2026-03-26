@@ -133,6 +133,9 @@ public class Router extends Device {
 	}
 
 	private void sendRIPRequest() {
+		// Ensure directly connected subnets are in the RIP route table
+		this.updateDirectlyConnectedRoutes();
+
 		RIPv2 rip = new RIPv2();
 		rip.setCommand(RIPv2.COMMAND_REQUEST);
 
@@ -154,20 +157,51 @@ public class Router extends Device {
 		for (Iface iface : this.getInterfaces().values()) {
 			ip.setSourceAddress(iface.getIpAddress());
 			eth.setSourceMACAddress(iface.getMacAddress().toBytes());
+			
+			// Reset checksums so they are recomputed for each interface
+			ip.setChecksum((short)0);
+			udp.setChecksum((short)0);
+			
 			this.sendPacket(eth, iface);
 		}
 	}
 
+	private void updateDirectlyConnectedRoutes() {
+		for (Iface iface : this.getInterfaces().values()) {
+			int networkAddress = iface.getIpAddress() & iface.getSubnetMask();
+			synchronized (this.ripRouteTable.getEntries()) {
+				boolean found = false;
+				for (RouteEntry entry : this.ripRouteTable.getEntries()) {
+					if (entry.getDestinationAddress() == networkAddress && entry.getMaskAddress() == iface.getSubnetMask()) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					this.ripRouteTable.insert(networkAddress, 0, iface.getSubnetMask(), iface, 1, System.currentTimeMillis());
+				}
+			}
+		}
+		updateMainRouteTable();
+	}
+
 	private void updateMainRouteTable() {
-		this.routeTable.clear();
-		for (RouteEntry entry : this.ripRouteTable.getEntries()) {
-			this.routeTable.insert(entry.getDestinationAddress(), entry.getGatewayAddress(), entry.getMaskAddress(), entry.getInterface());
+		synchronized (this.routeTable.getEntries()) {
+			this.routeTable.clear();
+			synchronized (this.ripRouteTable.getEntries()) {
+				for (RouteEntry entry : this.ripRouteTable.getEntries()) {
+					this.routeTable.insert(entry.getDestinationAddress(), entry.getGatewayAddress(), entry.getMaskAddress(), entry.getInterface());
+				}
+			}
 		}
 	}
 
 
 
 	private void sendRIPResponse(Iface outIface, int dstIp, MACAddress dstMac, boolean isUnsolicited) {
+		// Ensure directly connected subnets are in the RIP route table
+		this.updateDirectlyConnectedRoutes();
+
 		RIPv2 rip = new RIPv2();
 		rip.setCommand(RIPv2.COMMAND_RESPONSE);
 
@@ -199,6 +233,11 @@ public class Router extends Device {
 			for (Iface iface : this.getInterfaces().values()) {
 				ip.setSourceAddress(iface.getIpAddress());
 				eth.setSourceMACAddress(iface.getMacAddress().toBytes());
+				
+				// Reset checksums so they are recomputed for each interface
+				ip.setChecksum((short)0);
+				udp.setChecksum((short)0);
+				
 				this.sendPacket(eth, iface);
 			}
 		} else {
@@ -207,6 +246,11 @@ public class Router extends Device {
 			ip.setSourceAddress(outIface.getIpAddress());
 			eth.setDestinationMACAddress(dstMac.toBytes());
 			eth.setSourceMACAddress(outIface.getMacAddress().toBytes());
+			
+			// Reset checksums
+			ip.setChecksum((short)0);
+			udp.setChecksum((short)0);
+			
 			this.sendPacket(eth, outIface);
 		}
 	}
@@ -251,7 +295,7 @@ public class Router extends Device {
 							int subnetMask = newEntry.getSubnetMask();
 							int gateway = ipPacket.getSourceAddress(); // Gateway is the sender of the RIP response
 
-							RouteEntry existingEntry = this.ripRouteTable.lookup(dstIp);
+							RouteEntry existingEntry = this.ripRouteTable.find(dstIp, subnetMask);
 
 							if (existingEntry == null) {
 								// No existing route, insert new one

@@ -225,7 +225,7 @@ public class RouteTable
 	 * @param maskIp subnet mask of the entry to find
 	 * @return a matching entry if one was found, otherwise null
 	 */
-	private RouteEntry find(int dstIp, int maskIp)
+	public RouteEntry find(int dstIp, int maskIp)
 	{
 		synchronized(this.entries)
 		{
