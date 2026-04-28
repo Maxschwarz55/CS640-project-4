@@ -1,3 +1,79 @@
+import java.net.DatagramSocket;
+import java.net.DatagramPacket;
+import java.net.InetAddress;
+
+
+
+public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) {
+    
+    TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, -1, null);
+    synSegment.computeChecksum();
+    synSegment.startTimestamp();
+    ByteBuffer synData = synSegment.serialize();
+    DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, destIP, destPort);
+
+    senderSocket.send(synPacket);
+    
+    byte[] recvBuffer = new byte[24 + mtu];
+    DatagramPacket recvSynAckPacket = new DatagramPacket(recvBuffer, 24 + mtu);
+
+    senderSocket.receive(recvSynAckPacket);
+    
+    byte[] recvSynAckData = recvSynAckPacket.getData();
+    TCPSegment recvSynAckSegment = TCPSegment.deserialize(recvSynAckData, recvSynAckPacket.getLength());
+    if (recvSynAckSegment.getSyn() && recvSynAckSegment.getSequenceNumber() == 0 
+        && recvSynAckSegment.getAck() && recvSynAckSegment.getAcknowledgementNumber() == 1) {
+        
+        TCPSegment ackSegment = new TCPSegment(1, 1, recvSynAckSegment.getTimestamp(), 0, false, true, false, -1, null);
+        ackSegment.computeChecksum();
+        ByteBuffer ackData = ackSegment.serialize();
+        DatagramPacket ackPacket = new DatagramPacket(ackData.array(), 0, destIP, destPort);
+
+        senderSocket.send(ackPacket);
+    }
+
+    int RTT = System.nanoTime() - recvSynAckSegment.getTimestamp();
+        
+}
+
+public static void handleSender(int sourcePort, String destIP, int destPort, String fileName, int mtu, int sws) {
+    
+    DatagramSocket senderSocket = new DatagramSocket(sourcePort);
+    InetAddress destInetAddress = InetAddress.getByName(destIP);
+    senderHandshake(senderSocket, destInetAddress, destPort, mtu);
+
+}
+
+public static void receiverHandshake(DatagramSocket receiverSocket, int mtu) {
+
+    byte[] recvBuffer = new byte[24 + mtu];
+    DatagramPacket recvSynPacket = new DatagramPacket(recvBuffer, 24 + mtu);
+    
+    receiverSocket.receive(recvSynPacket);
+    InetAddress destIP = recvSynPacket.getAddress();
+    int destPort = recvSynPacket.getPort();
+
+    byte[] recvSynData = recvSynPacket.getData();
+    TCPSegment recvSynSegment = TCPSegment.deserialize(recvSynData, recvSynPacket.getLength());
+
+    if (recvSynSegment.getSyn() && recvSynSegment.getSequenceNumber() == 0) {
+        
+        TCPSegment synAckSegment = new TCPSegment(0, 1, recvSynSegment.getTimestamp(), 0, true, true, false, -1, null);
+        synAckSegment.computeChecksum();
+        ByteBuffer synAckData = synAckSegment.serialize();
+        DatagramPacket synAckPacket = new DatagramPacket(synAckData.array(), 0, destIP, destPort);
+        
+        receiverSocket.send(synAckPacket);
+    }
+}
+
+public static void handleReceiver(int sourcePort, String fileName, int mtu, int sws) {
+    
+    DatagramSocket receiverSocket = new DatagramSocket(sourcePort);
+    recieverHandshake(receiverSocket, mtu); 
+
+}
+
 public static void main(String[] args) {
 
     if (args.length != 12 && args.lengt != 8) {
@@ -9,7 +85,7 @@ public static void main(String[] args) {
     String fileName;
     int mtu;
     int sws;
-    int destIP = -1;
+    String destIP = null;
     int destPort = -1;
 
     if (!args[0].equals("-p")) {
@@ -139,12 +215,12 @@ public static void main(String[] args) {
         }
 
         if (mode.equals("-s")) {
-            startSender();
+            handleSender(sourcePort, destIP, destPort, fileName, mtu, sws);
         }
 
     }
 
     else if (mode.equals("-m")) {
-        startReciever();
+        handleReciever(sourcePort, fileName, mtu, sws);
     }
 }
