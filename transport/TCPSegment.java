@@ -94,7 +94,26 @@ public class TCPSegment {
 	}
 
 	public void computeChecksum() {
-
+        this.checksum = 0x0000;
+        ByteBuffer buf = this.serialize();
+        byte[] data = buf.array();
+        
+        int sum = 0;
+        for (int i = 0; i < data.length; i += 2) {
+            byte firstByte = data[i];
+            if (i != data.length -1) {
+                byte secondByte = data[i + 1];
+                sum += (firstByte & 0xFF) << 8 | (secondByte & 0xFF);
+            }
+            else {
+                sum += (firstByte & 0xFF) << 8;
+            }
+        }
+        // Handle carryouts at the end
+        while ((sum >>> 16) != 0) {
+            sum = (sum & 0xFFFF) + (sum >>> 16);
+        }
+        this.checksum = (short) ~sum;
 	}
 
 	public short getChecksum() {
