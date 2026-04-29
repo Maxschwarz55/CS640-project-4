@@ -7,7 +7,8 @@ public class TCPend {
 	public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) {
 
 		TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, -1, null);
-		synSegment.computeChecksum();
+		short synSegmentChecksum = synSegment.computeChecksum();
+        synSegment.setChecksum(synSegmentChecksum);
 		synSegment.startTimestamp();
 		ByteBuffer synData = synSegment.serialize();
 		DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, destIP, destPort);
@@ -21,12 +22,17 @@ public class TCPend {
 
 		byte[] recvSynAckData = recvSynAckPacket.getData();
 		TCPSegment recvSynAckSegment = TCPSegment.deserialize(recvSynAckData, recvSynAckPacket.getLength());
+
+        boolean checkSumMatch = recvSynAckSegment.getChecksum() == recvSynAckSegment.computeChecksum();
+
 		if (recvSynAckSegment.getSyn() && recvSynAckSegment.getSequenceNumber() == 0
-				&& recvSynAckSegment.getAck() && recvSynAckSegment.getAcknowledgementNumber() == 1) {
+				&& recvSynAckSegment.getAck() && recvSynAckSegment.getAcknowledgementNumber() == 1
+                && checkSumMatch) {
 
 			TCPSegment ackSegment = new TCPSegment(1, 1, recvSynAckSegment.getTimestamp(), 0, false, true, false, -1,
 					null);
-			ackSegment.computeChecksum();
+			short ackSegmentChecksum = ackSegment.computeChecksum();
+            ackSegment.setChecksum(ackSegmentChecksum);
 			ByteBuffer ackData = ackSegment.serialize();
 			DatagramPacket ackPacket = new DatagramPacket(ackData.array(), 0, destIP, destPort);
 
@@ -57,11 +63,14 @@ public class TCPend {
 		byte[] recvSynData = recvSynPacket.getData();
 		TCPSegment recvSynSegment = TCPSegment.deserialize(recvSynData, recvSynPacket.getLength());
 
-		if (recvSynSegment.getSyn() && recvSynSegment.getSequenceNumber() == 0) {
+        boolean checkSumMatch = recvSynSegment.getChecksum() == recvSynSegment.getChecksum();
+
+		if (recvSynSegment.getSyn() && recvSynSegment.getSequenceNumber() == 0 && checkSumMatch) {
 
 			TCPSegment synAckSegment = new TCPSegment(0, 1, recvSynSegment.getTimestamp(), 0, true, true, false, -1,
 					null);
-			synAckSegment.computeChecksum();
+			short synAckChecksum = synAckSegment.computeChecksum();
+            synAckSegment.setChecksum(synAckChecksum);
 			ByteBuffer synAckData = synAckSegment.serialize();
 			DatagramPacket synAckPacket = new DatagramPacket(synAckData.array(), 0, destIP, destPort);
 

@@ -93,7 +93,8 @@ public class TCPSegment {
 		return this.data;
 	}
 
-	public void computeChecksum() {
+	public short computeChecksum() {
+        short checksumTemp = this.checksum;
         this.checksum = 0x0000;
         ByteBuffer buf = this.serialize();
         byte[] data = buf.array();
@@ -113,8 +114,13 @@ public class TCPSegment {
         while ((sum >>> 16) != 0) {
             sum = (sum & 0xFFFF) + (sum >>> 16);
         }
-        this.checksum = (short) ~sum;
+        this.checksum = checksumTemp;
+        return (short) ~sum;
 	}
+
+    public void setChecksum(short checksum) {
+        this.checksum = checksum;
+    }
 
 	public short getChecksum() {
 		return this.checksum;
