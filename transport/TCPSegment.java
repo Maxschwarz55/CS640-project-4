@@ -17,7 +17,7 @@ public class TCPSegment {
 
 		this.seqNum = seqNum;
 		this.ackNum = ackNum;
-		this.timestamp = timestamp;
+		this.timestamp = timestamp; // ms
 		this.length = length;
 		this.synSet = synSet;
 		this.ackSet = ackSet;
@@ -44,7 +44,7 @@ public class TCPSegment {
 	}
 
 	public void startTimestamp() {
-		this.timestamp = System.nanoTime();
+		this.timestamp = System.nanoTime() / 1_000_000;
 	}
 
 	public long getTimestamp() {

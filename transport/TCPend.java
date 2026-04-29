@@ -4,12 +4,40 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 
 public class TCPend {
-	public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) {
+    
+    // Default timeout
+    public static double timeout = 5_000; // ms
+    // Estimated round trip time
+    public static double ertt;
+    // Estimated deviation
+    public static double edev;
+    // Constant
+    public static final double a = 0.875;
+    // Contant
+    public static final double b = 0.75;
+	
+    public static void setTimeout(long currentTime, long timestamp, int ackNum) {
+        
+        if (ackNum == 0) {
+            ertt = currentTime - timestamp;
+            edev = 0;
+            timeout = 2 * ertt;
+        }
+        else {
+            double srtt = currentTime - timestamp;
+            double sdev = Math.abs(srtt - ertt);
+            ertt = (a * ertt) + (1 - a) * srtt;
+            edev = (b * edev) + (1 - b) * sdev;
+            timeout = ertt + (4 * edev);
+        }
+    }
+    
+    public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) {
 
 		TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, -1, null);
-		short synSegmentChecksum = synSegment.computeChecksum();
+        synSegment.startTimestamp();
+        short synSegmentChecksum = synSegment.computeChecksum();
         synSegment.setChecksum(synSegmentChecksum);
-		synSegment.startTimestamp();
 		ByteBuffer synData = synSegment.serialize();
 		DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, destIP, destPort);
 
@@ -22,7 +50,11 @@ public class TCPend {
 
 		byte[] recvSynAckData = recvSynAckPacket.getData();
 		TCPSegment recvSynAckSegment = TCPSegment.deserialize(recvSynAckData, recvSynAckPacket.getLength());
-
+        
+        setTimeout((System.nanoTime() / 1_000_000), 
+            recvSynAckSegment.getTimestamp(), recvSynAckSegment.getAcknowledgementNumber());
+        senderSocket.setSoTimeout(timeout);
+        
         boolean checkSumMatch = recvSynAckSegment.getChecksum() == recvSynAckSegment.computeChecksum();
 
 		if (recvSynAckSegment.getSyn() && recvSynAckSegment.getSequenceNumber() == 0
@@ -39,13 +71,12 @@ public class TCPend {
 			senderSocket.send(ackPacket);
 		}
 
-		int RTT = System.nanoTime() - recvSynAckSegment.getTimestamp();
-
 	}
 
 	public static void handleSender(int sourcePort, String destIP, int destPort, String fileName, int mtu, int sws) {
 
 		DatagramSocket senderSocket = new DatagramSocket(sourcePort);
+        senderSocket.setSoTimeout(timeout);
 		InetAddress destInetAddress = InetAddress.getByName(destIP);
 		senderHandshake(senderSocket, destInetAddress, destPort, mtu);
 
