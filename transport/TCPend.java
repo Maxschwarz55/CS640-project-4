@@ -123,7 +123,7 @@ public class TCPend {
 			timeout = maxTimeout;
 		}
 
-		System.out.println("Timeout: " + timeout);
+		// System.out.println("Timeout: " + timeout);
 	}
 
 	static PacketInfo receivePacketFrom(DatagramSocket socket) throws Exception {
