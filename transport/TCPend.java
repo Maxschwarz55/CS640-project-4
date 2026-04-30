@@ -112,6 +112,8 @@ public class TCPend {
 			edev = b * edev + (1 - b) * sdev;
 			timeout = ertt + 4 * edev;
 		}
+
+		System.out.println("Timeout: " + timeout);
 	}
 
 	static PacketInfo receivePacketFrom(DatagramSocket socket) throws Exception {
