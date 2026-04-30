@@ -4,42 +4,41 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 
 public class TCPend {
-    
-    // Default timeout
-    public static double timeout = 5_000; // ms
-    // Estimated round trip time
-    public static double ertt;
-    // Estimated deviation
-    public static double edev;
-    // Constant
-    public static final double a = 0.875;
-    // Contant
-    public static final double b = 0.75;
-	
-    public static void setTimeout(long currentTime, long timestamp, int ackNum) {
-        
-        if (ackNum == 0) {
-            ertt = currentTime - timestamp;
-            edev = 0;
-            timeout = 2 * ertt;
-        }
-        else {
-            double srtt = currentTime - timestamp;
-            double sdev = Math.abs(srtt - ertt);
-            ertt = (a * ertt) + (1 - a) * srtt;
-            edev = (b * edev) + (1 - b) * sdev;
-            timeout = ertt + (4 * edev);
-        }
-    }
-    
-    public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) {
 
-		TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, -1, null);
-        synSegment.startTimestamp();
-        short synSegmentChecksum = synSegment.computeChecksum();
-        synSegment.setChecksum(synSegmentChecksum);
+	// Default timeout
+	public static double timeout = 5_000; // ms
+	// Estimated round trip time
+	public static double ertt;
+	// Estimated deviation
+	public static double edev;
+	// Constant
+	public static final double a = 0.875;
+	// Contant
+	public static final double b = 0.75;
+
+	public static void setTimeout(long currentTime, long timestamp, int ackNum) {
+
+		if (ackNum == 0) {
+			ertt = currentTime - timestamp;
+			edev = 0;
+			timeout = 2 * ertt;
+		} else {
+			double srtt = currentTime - timestamp;
+			double sdev = Math.abs(srtt - ertt);
+			ertt = (a * ertt) + (1 - a) * srtt;
+			edev = (b * edev) + (1 - b) * sdev;
+			timeout = ertt + (4 * edev);
+		}
+	}
+
+	public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) throws Exception {
+
+		TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, (short) -1, null);
+		synSegment.startTimestamp();
+		short synSegmentChecksum = synSegment.computeChecksum();
+		synSegment.setChecksum(synSegmentChecksum);
 		ByteBuffer synData = synSegment.serialize();
-		DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, destIP, destPort);
+		DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, synData.capacity(), destIP, destPort);
 
 		senderSocket.send(synPacket);
 
@@ -50,39 +49,40 @@ public class TCPend {
 
 		byte[] recvSynAckData = recvSynAckPacket.getData();
 		TCPSegment recvSynAckSegment = TCPSegment.deserialize(recvSynAckData, recvSynAckPacket.getLength());
-        
-        setTimeout((System.nanoTime() / 1_000_000), 
-            recvSynAckSegment.getTimestamp(), recvSynAckSegment.getAcknowledgementNumber());
-        senderSocket.setSoTimeout(timeout);
-        
-        boolean checkSumMatch = recvSynAckSegment.getChecksum() == recvSynAckSegment.computeChecksum();
+
+		setTimeout((System.nanoTime() / 1_000_000),
+				recvSynAckSegment.getTimestamp(), recvSynAckSegment.getAcknowledgementNumber());
+		senderSocket.setSoTimeout((int) timeout);
+
+		boolean checkSumMatch = recvSynAckSegment.getChecksum() == recvSynAckSegment.computeChecksum();
 
 		if (recvSynAckSegment.getSyn() && recvSynAckSegment.getSequenceNumber() == 0
 				&& recvSynAckSegment.getAck() && recvSynAckSegment.getAcknowledgementNumber() == 1
-                && checkSumMatch) {
+				&& checkSumMatch) {
 
-			TCPSegment ackSegment = new TCPSegment(1, 1, recvSynAckSegment.getTimestamp(), 0, false, true, false, -1,
+			TCPSegment ackSegment = new TCPSegment(1, 1, recvSynAckSegment.getTimestamp(), 0, false, true, false,
+					(short) -1,
 					null);
 			short ackSegmentChecksum = ackSegment.computeChecksum();
-            ackSegment.setChecksum(ackSegmentChecksum);
+			ackSegment.setChecksum(ackSegmentChecksum);
 			ByteBuffer ackData = ackSegment.serialize();
-			DatagramPacket ackPacket = new DatagramPacket(ackData.array(), 0, destIP, destPort);
+			DatagramPacket ackPacket = new DatagramPacket(ackData.array(), 0, ackData.capacity(), destIP, destPort);
 
 			senderSocket.send(ackPacket);
 		}
 
 	}
 
-	public static void handleSender(int sourcePort, String destIP, int destPort, String fileName, int mtu, int sws) {
+	public static void handleSender(int sourcePort, String destIP, int destPort, String fileName, int mtu, int sws) throws Exception {
 
 		DatagramSocket senderSocket = new DatagramSocket(sourcePort);
-        senderSocket.setSoTimeout(timeout);
+		senderSocket.setSoTimeout((int) timeout);
 		InetAddress destInetAddress = InetAddress.getByName(destIP);
 		senderHandshake(senderSocket, destInetAddress, destPort, mtu);
 
 	}
 
-	public static void receiverHandshake(DatagramSocket receiverSocket, int mtu) {
+	public static void receiverHandshake(DatagramSocket receiverSocket, int mtu) throws Exception {
 
 		byte[] recvBuffer = new byte[24 + mtu];
 		DatagramPacket recvSynPacket = new DatagramPacket(recvBuffer, 24 + mtu);
@@ -94,39 +94,40 @@ public class TCPend {
 		byte[] recvSynData = recvSynPacket.getData();
 		TCPSegment recvSynSegment = TCPSegment.deserialize(recvSynData, recvSynPacket.getLength());
 
-        boolean checkSumMatch = recvSynSegment.getChecksum() == recvSynSegment.getChecksum();
+		boolean checkSumMatch = recvSynSegment.getChecksum() == recvSynSegment.computeChecksum();
 
 		if (recvSynSegment.getSyn() && recvSynSegment.getSequenceNumber() == 0 && checkSumMatch) {
 
-			TCPSegment synAckSegment = new TCPSegment(0, 1, recvSynSegment.getTimestamp(), 0, true, true, false, -1,
+			TCPSegment synAckSegment = new TCPSegment(0, 1, recvSynSegment.getTimestamp(), 0, true, true, false,
+					(short) -1,
 					null);
 			short synAckChecksum = synAckSegment.computeChecksum();
-            synAckSegment.setChecksum(synAckChecksum);
+			synAckSegment.setChecksum(synAckChecksum);
 			ByteBuffer synAckData = synAckSegment.serialize();
-			DatagramPacket synAckPacket = new DatagramPacket(synAckData.array(), 0, destIP, destPort);
+			DatagramPacket synAckPacket = new DatagramPacket(synAckData.array(), 0, synAckData.capacity(), destIP, destPort);
 
 			receiverSocket.send(synAckPacket);
 		}
 	}
 
-	public static void handleReceiver(int sourcePort, String fileName, int mtu, int sws) {
+	public static void handleReceiver(int sourcePort, String fileName, int mtu, int sws) throws Exception {
 
 		DatagramSocket receiverSocket = new DatagramSocket(sourcePort);
 		receiverHandshake(receiverSocket, mtu);
 
 	}
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 
 		if (args.length != 12 && args.length != 8) {
 			System.out.println("Error: Command line args must be of length 12 or 8 (Not including executable)");
 			System.exit(1);
 		}
 
-		int sourcePort;
-		String fileName;
-		int mtu;
-		int sws;
+		int sourcePort = -1;
+		String fileName = "";
+		int mtu = -1;
+		int sws = -1;
 		String destIP = null;
 		int destPort = -1;
 

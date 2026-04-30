@@ -94,33 +94,32 @@ public class TCPSegment {
 	}
 
 	public short computeChecksum() {
-        short checksumTemp = this.checksum;
-        this.checksum = 0x0000;
-        ByteBuffer buf = this.serialize();
-        byte[] data = buf.array();
-        
-        int sum = 0;
-        for (int i = 0; i < data.length; i += 2) {
-            byte firstByte = data[i];
-            if (i != data.length -1) {
-                byte secondByte = data[i + 1];
-                sum += (firstByte & 0xFF) << 8 | (secondByte & 0xFF);
-            }
-            else {
-                sum += (firstByte & 0xFF) << 8;
-            }
-        }
-        // Handle carryouts at the end
-        while ((sum >>> 16) != 0) {
-            sum = (sum & 0xFFFF) + (sum >>> 16);
-        }
-        this.checksum = checksumTemp;
-        return (short) ~sum;
+		short checksumTemp = this.checksum;
+		this.checksum = 0x0000;
+		ByteBuffer buf = this.serialize();
+		byte[] data = buf.array();
+
+		int sum = 0;
+		for (int i = 0; i < data.length; i += 2) {
+			byte firstByte = data[i];
+			if (i != data.length - 1) {
+				byte secondByte = data[i + 1];
+				sum += (firstByte & 0xFF) << 8 | (secondByte & 0xFF);
+			} else {
+				sum += (firstByte & 0xFF) << 8;
+			}
+		}
+		// Handle carryouts at the end
+		while ((sum >>> 16) != 0) {
+			sum = (sum & 0xFFFF) + (sum >>> 16);
+		}
+		this.checksum = checksumTemp;
+		return (short) ~sum;
 	}
 
-    public void setChecksum(short checksum) {
-        this.checksum = checksum;
-    }
+	public void setChecksum(short checksum) {
+		this.checksum = checksum;
+	}
 
 	public short getChecksum() {
 		return this.checksum;
@@ -134,7 +133,8 @@ public class TCPSegment {
 		if (this.checksum == -1) {
 			throw new IllegalArgumentException("Checksum must be computed");
 		}
-		ByteBuffer buf = ByteBuffer.allocate(24 + data.length);
+		int dataLength = (this.data != null) ? this.data.length : 0;
+		ByteBuffer buf = ByteBuffer.allocate(24 + dataLength);
 		// Sequence number - first 4 bytes
 		buf.putInt(this.seqNum);
 		// Acknowledgement number - next 4 bytes
@@ -146,7 +146,7 @@ public class TCPSegment {
 		int lengthAndFlags = (this.length << 3) | flags;
 		buf.putInt(lengthAndFlags);
 		// All zeroes - next 2 bytes
-		buf.putShort(0);
+		buf.putShort((short) 0);
 		// Checksum - next 2 bytes
 		buf.putShort(this.checksum);
 		// Data
@@ -177,9 +177,11 @@ public class TCPSegment {
 		short checksum = buf.getShort();
 		// Data
 		byte[] pData = new byte[pLength];
-		buf.get(pData);
+		if (pLength > 0) {
+			buf.get(pData);
+		}
 
-		return new TCPSegment(seqNum, ackNum, timestamp, pLength, synSet, finSet, ackSet, checksum, data);
+		return new TCPSegment(seqNum, ackNum, timestamp, pLength, synSet, ackSet, finSet, checksum, pData);
 
 	}
 
