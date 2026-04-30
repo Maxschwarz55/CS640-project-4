@@ -32,6 +32,7 @@ public class TCPend {
 	static class SenderSegment {
 		int seqNum;
 		byte[] data;
+		boolean resent;
 	}
 
 	static class PacketInfo {
@@ -163,6 +164,7 @@ public class TCPend {
 			SenderSegment seg = new SenderSegment();
 			seg.seqNum = currentSeq;
 			seg.data = chunk;
+			seg.resent = false;
 			segments.add(seg);
 			currentSeq += len;
 		}
@@ -228,11 +230,19 @@ public class TCPend {
 					continue;
 				}
 				if (p.getAck()) {
-					updateTimeout(p.getTimestamp());
-					socket.setSoTimeout((int) timeout);
-
 					int ackNum = p.getAcknowledgementNumber();
 					if (ackNum > lastAckReceived) {
+						for (int i = base; i < nextSegment; i++) {
+							SenderSegment seg = segments.get(i);
+							if (seg.seqNum + seg.data.length == ackNum) {
+								if (!seg.resent) {
+									updateTimeout(p.getTimestamp());
+									socket.setSoTimeout((int) timeout);
+								}
+								break;
+							}
+						}
+
 						while (base < segments.size() && segments.get(base).seqNum < ackNum) {
 							statDataTransferred += segments.get(base).data.length;
 							base++;
@@ -259,6 +269,9 @@ public class TCPend {
 				rtx.setChecksum(rtx.computeChecksum());
 				sendPacket(socket, rtx, destIP, remotePort);
 				statRetransmissions++;
+
+				timeout *= 2;
+				socket.setSoTimeout((int) timeout);
 			}
 		}
 
