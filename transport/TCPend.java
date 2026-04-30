@@ -32,8 +32,6 @@ public class TCPend {
 	static class SenderSegment {
 		int seqNum;
 		byte[] data;
-		long sendTimeNano;
-		int retransmissions;
 	}
 
 	static class PacketInfo {
@@ -188,6 +186,8 @@ public class TCPend {
 					synAck = null;
 				}
 			} catch (SocketTimeoutException e) {
+				syn.startTimestamp();
+				syn.setChecksum(syn.computeChecksum());
 				sendPacket(socket, syn, destIP, remotePort);
 				synRetries++;
 				statRetransmissions++;
@@ -218,8 +218,6 @@ public class TCPend {
 						(short) 0, seg.data);
 				p.setChecksum(p.computeChecksum());
 				sendPacket(socket, p, destIP, remotePort);
-				seg.sendTimeNano = p.getTimestamp();
-				seg.retransmissions = 0;
 				nextSegment++;
 			}
 
@@ -230,52 +228,37 @@ public class TCPend {
 					continue;
 				}
 				if (p.getAck()) {
+					updateTimeout(p.getTimestamp());
+					socket.setSoTimeout((int) timeout);
+
 					int ackNum = p.getAcknowledgementNumber();
 					if (ackNum > lastAckReceived) {
-						for (int i = base; i < nextSegment; i++) {
-							SenderSegment seg = segments.get(i);
-							if (seg.seqNum + seg.data.length == ackNum) {
-								if (seg.retransmissions == 0) {
-									updateTimeout(seg.sendTimeNano);
-								}
-								break;
-							}
-						}
-
 						while (base < segments.size() && segments.get(base).seqNum < ackNum) {
 							statDataTransferred += segments.get(base).data.length;
 							base++;
 						}
 						lastAckReceived = ackNum;
 						dupAcks = 0;
-						socket.setSoTimeout((int) timeout);
 					} else if (ackNum == lastAckReceived) {
 						dupAcks++;
 						statDuplicateAcks++;
 						if (dupAcks == 3) {
-							if (base < segments.size()) {
-								SenderSegment seg = segments.get(base);
-								TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length,
-										false, true, false, (short) 0, seg.data);
-								rtx.setChecksum(rtx.computeChecksum());
-								sendPacket(socket, rtx, destIP, remotePort);
-								statRetransmissions++;
-								seg.retransmissions++;
-							}
+							SenderSegment seg = segments.get(base);
+							TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length,
+									false, true, false, (short) 0, seg.data);
+							rtx.setChecksum(rtx.computeChecksum());
+							sendPacket(socket, rtx, destIP, remotePort);
+							statRetransmissions++;
 						}
 					}
 				}
 			} catch (SocketTimeoutException e) {
-				if (base < segments.size()) {
-					SenderSegment seg = segments.get(base);
-					TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length, false, true,
-							false, (short) 0, seg.data);
-					rtx.setChecksum(rtx.computeChecksum());
-					sendPacket(socket, rtx, destIP, remotePort);
-					statRetransmissions++;
-					seg.retransmissions++;
-					socket.setSoTimeout((int) timeout);
-				}
+				SenderSegment seg = segments.get(base);
+				TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length, false, true,
+						false, (short) 0, seg.data);
+				rtx.setChecksum(rtx.computeChecksum());
+				sendPacket(socket, rtx, destIP, remotePort);
+				statRetransmissions++;
 			}
 		}
 
