@@ -1,262 +1,411 @@
-import java.net.DatagramSocket;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public class TCPend {
+    static double timeout = 5000.0;
+    static double ertt = 0;
+    static double edev = 0;
+    static final double a = 0.875;
+    static final double b = 0.75;
+    static boolean firstAck = true;
 
-	// Default timeout
-	public static double timeout = 5_000; // ms
-	// Estimated round trip time
-	public static double ertt;
-	// Estimated deviation
-	public static double edev;
-	// Constant
-	public static final double a = 0.875;
-	// Contant
-	public static final double b = 0.75;
+    static long startNanoTime;
 
-	public static void setTimeout(long currentTime, long timestamp, int ackNum) {
+    static long statDataTransferred = 0;
+    static long statPacketsSent = 0;
+    static long statPacketsReceived = 0;
+    static long statOutOfSequence = 0;
+    static long statIncorrectChecksum = 0;
+    static long statRetransmissions = 0;
+    static long statDuplicateAcks = 0;
 
-		if (ackNum == 0) {
-			ertt = currentTime - timestamp;
-			edev = 0;
-			timeout = 2 * ertt;
-		} else {
-			double srtt = currentTime - timestamp;
-			double sdev = Math.abs(srtt - ertt);
-			ertt = (a * ertt) + (1 - a) * srtt;
-			edev = (b * edev) + (1 - b) * sdev;
-			timeout = ertt + (4 * edev);
-		}
-	}
+    static class SenderSegment {
+        int seqNum;
+        byte[] data;
+        long sendTimeNano;
+        int retransmissions;
+    }
 
-	public static void senderHandshake(DatagramSocket senderSocket, InetAddress destIP, int destPort, int mtu) throws Exception {
+    static class PacketInfo {
+        TCPSegment seg;
+        InetAddress ip;
+        int port;
+    }
 
-		TCPSegment synSegment = new TCPSegment(0, 0, -1, 0, true, false, false, (short) -1, null);
-		synSegment.startTimestamp();
-		short synSegmentChecksum = synSegment.computeChecksum();
-		synSegment.setChecksum(synSegmentChecksum);
-		ByteBuffer synData = synSegment.serialize();
-		DatagramPacket synPacket = new DatagramPacket(synData.array(), 0, synData.capacity(), destIP, destPort);
+    public static void main(String[] args) throws Exception {
+        int port = -1;
+        String remoteIP = null;
+        int remotePort = -1;
+        String fileName = null;
+        int mtu = -1;
+        int sws = -1;
+        boolean isSender = false;
 
-		senderSocket.send(synPacket);
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "-p": port = Integer.parseInt(args[++i]); break;
+                case "-s": remoteIP = args[++i]; isSender = true; break;
+                case "-a": remotePort = Integer.parseInt(args[++i]); break;
+                case "-f": fileName = args[++i]; break;
+                case "-m": mtu = Integer.parseInt(args[++i]); break;
+                case "-c": sws = Integer.parseInt(args[++i]); break;
+            }
+        }
 
-		byte[] recvBuffer = new byte[24 + mtu];
-		DatagramPacket recvSynAckPacket = new DatagramPacket(recvBuffer, 24 + mtu);
+        startNanoTime = System.nanoTime();
 
-		senderSocket.receive(recvSynAckPacket);
+        if (isSender) {
+            handleSender(port, remoteIP, remotePort, fileName, mtu, sws);
+        } else {
+            handleReceiver(port, fileName, mtu, sws);
+        }
+    }
 
-		byte[] recvSynAckData = recvSynAckPacket.getData();
-		TCPSegment recvSynAckSegment = TCPSegment.deserialize(recvSynAckData, recvSynAckPacket.getLength());
+    static void logPacket(String direction, TCPSegment seg) {
+        double timeSec = (System.nanoTime() - startNanoTime) / 1_000_000_000.0;
+        String sFlag = seg.getSyn() ? "S" : "-";
+        String aFlag = seg.getAck() ? "A" : "-";
+        String fFlag = seg.getFin() ? "F" : "-";
+        String dFlag = (seg.getData() != null && seg.getData().length > 0) ? "D" : "-";
+        int dataLen = seg.getLength();
 
-		setTimeout((System.nanoTime() / 1_000_000),
-				recvSynAckSegment.getTimestamp(), recvSynAckSegment.getAcknowledgementNumber());
-		senderSocket.setSoTimeout((int) timeout);
+        System.out.printf("%s %.3f %s %s %s %s %d %d %d\n",
+                direction, timeSec, sFlag, aFlag, fFlag, dFlag,
+                seg.getSequenceNumber(), dataLen, seg.getAcknowledgementNumber());
+    }
 
-		boolean checkSumMatch = recvSynAckSegment.getChecksum() == recvSynAckSegment.computeChecksum();
+    static void updateTimeout(long sendNanoTimestamp) {
+        long currentNano = System.nanoTime();
+        double rttMs = (currentNano - sendNanoTimestamp) / 1_000_000.0;
 
-		if (recvSynAckSegment.getSyn() && recvSynAckSegment.getSequenceNumber() == 0
-				&& recvSynAckSegment.getAck() && recvSynAckSegment.getAcknowledgementNumber() == 1
-				&& checkSumMatch) {
+        if (firstAck) {
+            ertt = rttMs;
+            edev = 0;
+            timeout = 2 * ertt;
+            firstAck = false;
+        } else {
+            double sdev = Math.abs(rttMs - ertt);
+            ertt = a * ertt + (1 - a) * rttMs;
+            edev = b * edev + (1 - b) * sdev;
+            timeout = ertt + 4 * edev;
+        }
+    }
 
-			TCPSegment ackSegment = new TCPSegment(1, 1, recvSynAckSegment.getTimestamp(), 0, false, true, false,
-					(short) -1,
-					null);
-			short ackSegmentChecksum = ackSegment.computeChecksum();
-			ackSegment.setChecksum(ackSegmentChecksum);
-			ByteBuffer ackData = ackSegment.serialize();
-			DatagramPacket ackPacket = new DatagramPacket(ackData.array(), 0, ackData.capacity(), destIP, destPort);
+    static PacketInfo receivePacketFrom(DatagramSocket socket) throws Exception {
+        byte[] buf = new byte[65535];
+        DatagramPacket dp = new DatagramPacket(buf, buf.length);
+        socket.receive(dp);
+        statPacketsReceived++;
+        TCPSegment seg = TCPSegment.deserialize(dp.getData(), dp.getLength());
+        logPacket("rcv", seg);
+        PacketInfo info = new PacketInfo();
+        info.seg = seg;
+        info.ip = dp.getAddress();
+        info.port = dp.getPort();
+        return info;
+    }
 
-			senderSocket.send(ackPacket);
-		}
+    static TCPSegment receivePacket(DatagramSocket socket) throws Exception {
+        return receivePacketFrom(socket).seg;
+    }
 
-	}
+    static void sendPacket(DatagramSocket socket, TCPSegment seg, InetAddress ip, int port) throws Exception {
+        ByteBuffer buf = seg.serialize();
+        DatagramPacket dp = new DatagramPacket(buf.array(), buf.limit(), ip, port);
+        socket.send(dp);
+        statPacketsSent++;
+        logPacket("snd", seg);
+    }
 
-	public static void handleSender(int sourcePort, String destIP, int destPort, String fileName, int mtu, int sws) throws Exception {
+    static void handleSender(int port, String remoteIP, int remotePort, String fileName, int mtu, int sws) throws Exception {
+        DatagramSocket socket = new DatagramSocket(port);
+        InetAddress destIP = InetAddress.getByName(remoteIP);
 
-		DatagramSocket senderSocket = new DatagramSocket(sourcePort);
-		senderSocket.setSoTimeout((int) timeout);
-		InetAddress destInetAddress = InetAddress.getByName(destIP);
-		senderHandshake(senderSocket, destInetAddress, destPort, mtu);
+        File file = new File(fileName);
+        byte[] fileData = new byte[0];
+        if (file.exists()) {
+            FileInputStream fis = new FileInputStream(file);
+            fileData = new byte[(int) file.length()];
+            int read = fis.read(fileData);
+            fis.close();
+        }
 
-	}
+        List<SenderSegment> segments = new ArrayList<>();
+        int currentSeq = 1;
+        for (int i = 0; i < fileData.length; i += mtu) {
+            int len = Math.min(mtu, fileData.length - i);
+            byte[] chunk = new byte[len];
+            System.arraycopy(fileData, i, chunk, 0, len);
+            SenderSegment seg = new SenderSegment();
+            seg.seqNum = currentSeq;
+            seg.data = chunk;
+            segments.add(seg);
+            currentSeq += len;
+        }
 
-	public static void receiverHandshake(DatagramSocket receiverSocket, int mtu) throws Exception {
+        TCPSegment syn = new TCPSegment(0, 0, System.nanoTime(), 0, true, false, false, (short) 0, null);
+        syn.setChecksum(syn.computeChecksum());
+        sendPacket(socket, syn, destIP, remotePort);
 
-		byte[] recvBuffer = new byte[24 + mtu];
-		DatagramPacket recvSynPacket = new DatagramPacket(recvBuffer, 24 + mtu);
+        socket.setSoTimeout((int) timeout);
+        TCPSegment synAck = null;
+        int synRetries = 0;
+        while (synAck == null && synRetries < 16) {
+            try {
+                synAck = receivePacket(socket);
+                if (synAck.getChecksum() != synAck.computeChecksum()) {
+                    statIncorrectChecksum++;
+                    synAck = null;
+                    continue;
+                }
+                if (!synAck.getSyn() || !synAck.getAck() || synAck.getAcknowledgementNumber() != 1) {
+                    synAck = null;
+                }
+            } catch (SocketTimeoutException e) {
+                sendPacket(socket, syn, destIP, remotePort);
+                synRetries++;
+                statRetransmissions++;
+            }
+        }
+        if (synAck == null) {
+            System.out.println("Failed to connect");
+            return;
+        }
 
-		receiverSocket.receive(recvSynPacket);
-		InetAddress destIP = recvSynPacket.getAddress();
-		int destPort = recvSynPacket.getPort();
+        TCPSegment ack = new TCPSegment(1, 1, synAck.getTimestamp(), 0, false, true, false, (short) 0, null);
+        ack.setChecksum(ack.computeChecksum());
+        sendPacket(socket, ack, destIP, remotePort);
 
-		byte[] recvSynData = recvSynPacket.getData();
-		TCPSegment recvSynSegment = TCPSegment.deserialize(recvSynData, recvSynPacket.getLength());
+        updateTimeout(syn.getTimestamp());
 
-		boolean checkSumMatch = recvSynSegment.getChecksum() == recvSynSegment.computeChecksum();
+        int base = 0;
+        int nextSegment = 0;
+        int dupAcks = 0;
+        int lastAckReceived = 1;
 
-		if (recvSynSegment.getSyn() && recvSynSegment.getSequenceNumber() == 0 && checkSumMatch) {
+        socket.setSoTimeout((int) timeout);
 
-			TCPSegment synAckSegment = new TCPSegment(0, 1, recvSynSegment.getTimestamp(), 0, true, true, false,
-					(short) -1,
-					null);
-			short synAckChecksum = synAckSegment.computeChecksum();
-			synAckSegment.setChecksum(synAckChecksum);
-			ByteBuffer synAckData = synAckSegment.serialize();
-			DatagramPacket synAckPacket = new DatagramPacket(synAckData.array(), 0, synAckData.capacity(), destIP, destPort);
+        while (base < segments.size()) {
+            while (nextSegment < base + sws && nextSegment < segments.size()) {
+                SenderSegment seg = segments.get(nextSegment);
+                TCPSegment p = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length, false, true, false, (short) 0, seg.data);
+                p.setChecksum(p.computeChecksum());
+                sendPacket(socket, p, destIP, remotePort);
+                seg.sendTimeNano = p.getTimestamp();
+                seg.retransmissions = 0;
+                nextSegment++;
+            }
 
-			receiverSocket.send(synAckPacket);
-		}
-	}
+            try {
+                TCPSegment p = receivePacket(socket);
+                if (p.getChecksum() != p.computeChecksum()) {
+                    statIncorrectChecksum++;
+                    continue;
+                }
+                if (p.getAck()) {
+                    int ackNum = p.getAcknowledgementNumber();
+                    if (ackNum > lastAckReceived) {
+                        for (int i = base; i < nextSegment; i++) {
+                            SenderSegment seg = segments.get(i);
+                            if (seg.seqNum + seg.data.length == ackNum) {
+                                if (seg.retransmissions == 0) {
+                                    updateTimeout(seg.sendTimeNano);
+                                }
+                                break;
+                            }
+                        }
 
-	public static void handleReceiver(int sourcePort, String fileName, int mtu, int sws) throws Exception {
+                        while (base < segments.size() && segments.get(base).seqNum < ackNum) {
+                            statDataTransferred += segments.get(base).data.length;
+                            base++;
+                        }
+                        lastAckReceived = ackNum;
+                        dupAcks = 0;
+                        socket.setSoTimeout((int) timeout);
+                    } else if (ackNum == lastAckReceived) {
+                        dupAcks++;
+                        statDuplicateAcks++;
+                        if (dupAcks == 3) {
+                            if (base < segments.size()) {
+                                SenderSegment seg = segments.get(base);
+                                TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length, false, true, false, (short) 0, seg.data);
+                                rtx.setChecksum(rtx.computeChecksum());
+                                sendPacket(socket, rtx, destIP, remotePort);
+                                statRetransmissions++;
+                                seg.retransmissions++;
+                            }
+                        }
+                    }
+                }
+            } catch (SocketTimeoutException e) {
+                if (base < segments.size()) {
+                    SenderSegment seg = segments.get(base);
+                    TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length, false, true, false, (short) 0, seg.data);
+                    rtx.setChecksum(rtx.computeChecksum());
+                    sendPacket(socket, rtx, destIP, remotePort);
+                    statRetransmissions++;
+                    seg.retransmissions++;
+                    socket.setSoTimeout((int) timeout);
+                }
+            }
+        }
 
-		DatagramSocket receiverSocket = new DatagramSocket(sourcePort);
-		receiverHandshake(receiverSocket, mtu);
+        int finSeq = currentSeq;
+        TCPSegment fin = new TCPSegment(finSeq, 1, System.nanoTime(), 0, false, true, true, (short) 0, null);
+        fin.setChecksum(fin.computeChecksum());
+        sendPacket(socket, fin, destIP, remotePort);
 
-	}
+        boolean finAcked = false;
+        boolean finReceived = false;
+        int finRetries = 0;
+        socket.setSoTimeout((int) timeout);
 
-	public static void main(String[] args) throws Exception {
+        while ((!finAcked || !finReceived) && finRetries < 16) {
+            try {
+                TCPSegment p = receivePacket(socket);
+                if (p.getChecksum() != p.computeChecksum()) {
+                    statIncorrectChecksum++;
+                    continue;
+                }
+                if (p.getAck() && p.getAcknowledgementNumber() == finSeq + 1) {
+                    finAcked = true;
+                }
+                if (p.getFin()) {
+                    finReceived = true;
+                    TCPSegment ackFin = new TCPSegment(finSeq + 1, p.getSequenceNumber() + 1, p.getTimestamp(), 0, false, true, false, (short) 0, null);
+                    ackFin.setChecksum(ackFin.computeChecksum());
+                    sendPacket(socket, ackFin, destIP, remotePort);
+                }
+            } catch (SocketTimeoutException e) {
+                if (!finAcked) {
+                    sendPacket(socket, fin, destIP, remotePort);
+                    statRetransmissions++;
+                    finRetries++;
+                } else if (!finReceived) {
+                    finRetries++;
+                }
+            }
+        }
 
-		if (args.length != 12 && args.length != 8) {
-			System.out.println("Error: Command line args must be of length 12 or 8 (Not including executable)");
-			System.exit(1);
-		}
+        printStats();
+    }
 
-		int sourcePort = -1;
-		String fileName = "";
-		int mtu = -1;
-		int sws = -1;
-		String destIP = null;
-		int destPort = -1;
+    static void handleReceiver(int port, String fileName, int mtu, int sws) throws Exception {
+        DatagramSocket socket = new DatagramSocket(port);
 
-		if (!args[0].equals("-p")) {
-			System.out.println("Error: First arg must contain -p flag");
-			System.exit(1);
-		}
+        TCPSegment syn = null;
+        InetAddress clientIP = null;
+        int clientPort = -1;
 
-		try {
-			sourcePort = Integer.parseInt(args[1]);
-			if (sourcePort < 0 || sourcePort > 65_535) {
-				System.out.println("Error: Source port must be in range 0-65535");
-				System.exit(1);
-			}
-		} catch (NumberFormatException e) {
-			System.out.println("Error: Source port not a number");
-			System.exit(1);
-		}
+        while (syn == null) {
+            PacketInfo p = receivePacketFrom(socket);
+            if (p.seg.getChecksum() != p.seg.computeChecksum()) {
+                statIncorrectChecksum++;
+                continue;
+            }
+            if (p.seg.getSyn()) {
+                syn = p.seg;
+                clientIP = p.ip;
+                clientPort = p.port;
+            }
+        }
 
-		String mode = args[2];
+        TCPSegment synAck = new TCPSegment(0, 1, syn.getTimestamp(), 0, true, true, false, (short) 0, null);
+        synAck.setChecksum(synAck.computeChecksum());
+        sendPacket(socket, synAck, clientIP, clientPort);
 
-		if (!mode.equals("-s") && !mode.equals("-m")) {
-			System.out.println("Error: Mode must be -s or -m");
-			System.exit(1);
-		}
+        int expectedSeq = 1;
+        Map<Integer, TCPSegment> buffer = new HashMap<>();
+        FileOutputStream fos = new FileOutputStream(fileName);
 
-		if (mode.equals("-s")) {
-			try {
-				int numIP = Integer.parseInt(args[3]);
-				if (numIP < 0) {
-					System.out.println("Error: Destination IP must be positive");
-					System.exit(1);
-				}
-			} catch (NumberFormatException e) {
-				System.out.println("Error: Destination IP not a number");
-				System.exit(1);
-			}
-		} else {
-			try {
-				mtu = Integer.parseInt(args[3]);
-				if (mtu < 0) {
-					System.out.println("Error: MTU must be positive");
-					System.exit(1);
-				}
+        while (true) {
+            TCPSegment p = null;
+            try {
+                p = receivePacket(socket);
+            } catch (SocketTimeoutException e) {
+                continue;
+            }
+            if (p.getChecksum() != p.computeChecksum()) {
+                statIncorrectChecksum++;
+                continue;
+            }
 
-			} catch (NumberFormatException e) {
-				System.out.println("Error: MTU not a number");
-				System.exit(1);
-			}
-		}
-		String nextOption = args[4];
-		if (!nextOption.equals("-a") && !nextOption.equals("-c")) {
-			System.out.println("Error: Option must be -a or -c");
-			System.exit(1);
-		}
+            if (p.getSyn()) {
+                sendPacket(socket, synAck, clientIP, clientPort);
+                continue;
+            }
 
-		if (nextOption.equals("-a")) {
-			try {
-				destPort = Integer.parseInt(args[5]);
-				if (destPort < 0 || destPort > 65_535) {
-					System.out.println("Error: Destination port must be in range 0-65535");
-					System.exit(1);
-				}
-			} catch (NumberFormatException e) {
-				System.out.println("Error: Destination port not a number");
-				System.exit(1);
-			}
-		}
+            if (p.getFin()) {
+                TCPSegment ackFin = new TCPSegment(1, p.getSequenceNumber() + 1, p.getTimestamp(), 0, false, true, false, (short) 0, null);
+                ackFin.setChecksum(ackFin.computeChecksum());
+                sendPacket(socket, ackFin, clientIP, clientPort);
 
-		if (nextOption.equals("-c")) {
-			try {
-				sws = Integer.parseInt(args[5]);
-				if (sws < 0) {
-					System.out.println("Error: SWS must be positive");
-					System.exit(1);
-				}
-			} catch (NumberFormatException e) {
-				System.out.println("Error: SWS not a number");
-				System.exit(1);
-			}
-		}
+                TCPSegment fin = new TCPSegment(1, p.getSequenceNumber() + 1, System.nanoTime(), 0, false, true, true, (short) 0, null);
+                fin.setChecksum(fin.computeChecksum());
+                sendPacket(socket, fin, clientIP, clientPort);
 
-		if (!args[6].equals("-f")) {
-			System.out.println("Error: must specify filename with -f");
-			System.exit(1);
-		}
+                socket.setSoTimeout(5000);
+                try {
+                    while (true) {
+                        TCPSegment lastAck = receivePacket(socket);
+                        if (lastAck.getAck() && lastAck.getAcknowledgementNumber() == 2) {
+                            break;
+                        }
+                    }
+                } catch (SocketTimeoutException e) {
+                }
+                break;
+            }
 
-		fileName = args[7];
+            if (p.getData() != null && p.getData().length > 0) {
+                int seq = p.getSequenceNumber();
+                if (seq == expectedSeq) {
+                    fos.write(p.getData());
+                    statDataTransferred += p.getData().length;
+                    expectedSeq += p.getData().length;
 
-		if (args.length == 12) {
-			if (!args[8].equals("-m")) {
-				System.out.println("Error: must specify MTU with -m");
-				System.exit(1);
-			}
-			try {
-				mtu = Integer.parseInt(args[9]);
-				if (mtu < 0) {
-					System.out.println("Error: MTU must be positive");
-					System.exit(1);
-				}
+                    while (buffer.containsKey(expectedSeq)) {
+                        TCPSegment buffered = buffer.remove(expectedSeq);
+                        fos.write(buffered.getData());
+                        statDataTransferred += buffered.getData().length;
+                        expectedSeq += buffered.getData().length;
+                    }
+                } else if (seq > expectedSeq) {
+                    if (!buffer.containsKey(seq)) {
+                        buffer.put(seq, p);
+                        statOutOfSequence++;
+                    }
+                }
 
-			} catch (NumberFormatException e) {
-				System.out.println("Error: MTU not a number");
-				System.exit(1);
-			}
-			if (!args[10].equals("-c")) {
-				System.out.println("Error: must specify SWS with -c");
-				System.exit(1);
-			}
-			try {
-				sws = Integer.parseInt(args[11]);
-				if (sws < 0) {
-					System.out.println("Error: SWS must be positive");
-					System.exit(1);
-				}
+                TCPSegment ack = new TCPSegment(1, expectedSeq, p.getTimestamp(), 0, false, true, false, (short) 0, null);
+                ack.setChecksum(ack.computeChecksum());
+                sendPacket(socket, ack, clientIP, clientPort);
+            } else if (p.getAck()) {
+                // ACK
+            }
+        }
 
-			} catch (NumberFormatException e) {
-				System.out.println("Error: SWS not a number");
-				System.exit(1);
-			}
+        fos.close();
+        printStats();
+    }
 
-			if (mode.equals("-s")) {
-				handleSender(sourcePort, destIP, destPort, fileName, mtu, sws);
-			}
-
-		}
-
-		else if (mode.equals("-m")) {
-			handleReceiver(sourcePort, fileName, mtu, sws);
-		}
-	}
+    static void printStats() {
+        System.out.printf("%d %d %d %d %d %d\n",
+                statDataTransferred,
+                statPacketsSent + statPacketsReceived,
+                statOutOfSequence,
+                statIncorrectChecksum,
+                statRetransmissions,
+                statDuplicateAcks);
+    }
 }
