@@ -13,6 +13,7 @@ import java.util.Map;
 
 public class TCPend {
 	static double timeout = 5000.0;
+	static double maxTimeout = 5000.0;
 	static double ertt = 0;
 	static double edev = 0;
 	static final double a = 0.875;
@@ -97,19 +98,29 @@ public class TCPend {
 	}
 
 	static void updateTimeout(long sendNanoTimestamp) {
-		long currentNano = System.nanoTime();
-		double rttMs = (currentNano - sendNanoTimestamp) / 1_000_000.0;
+		// No ack
+		if (sendNanoTimestamp == -1) {
+			timeout *= 2;
+		}
+		// Ack
+		else {
+			long currentNano = System.nanoTime();
+			double rttMs = (currentNano - sendNanoTimestamp) / 1_000_000.0;
 
-		if (firstAck) {
-			ertt = rttMs;
-			edev = 0;
-			timeout = 2 * ertt;
-			firstAck = false;
-		} else {
-			double sdev = Math.abs(rttMs - ertt);
-			ertt = a * ertt + (1 - a) * rttMs;
-			edev = b * edev + (1 - b) * sdev;
-			timeout = ertt + 4 * edev;
+			if (firstAck) {
+				ertt = rttMs;
+				edev = 0;
+				timeout = 2 * ertt;
+				firstAck = false;
+			} else {
+				double sdev = Math.abs(rttMs - ertt);
+				ertt = a * ertt + (1 - a) * rttMs;
+				edev = b * edev + (1 - b) * sdev;
+				timeout = ertt + 4 * edev;
+			}
+		}
+		if (timeout > maxTimeout) {
+			timeout = maxTimeout;
 		}
 
 		System.out.println("Timeout: " + timeout);
@@ -205,13 +216,12 @@ public class TCPend {
 		sendPacket(socket, ack, destIP, remotePort);
 
 		updateTimeout(syn.getTimestamp());
+		socket.setSoTimeout((int) timeout);
 
 		int base = 0;
 		int nextSegment = 0;
 		int dupAcks = 0;
 		int lastAckReceived = 1;
-
-		socket.setSoTimeout((int) timeout);
 
 		while (base < segments.size()) {
 			while (nextSegment < base + sws && nextSegment < segments.size()) {
@@ -270,7 +280,7 @@ public class TCPend {
 				sendPacket(socket, rtx, destIP, remotePort);
 				statRetransmissions++;
 
-				timeout *= 2;
+				updateTimeout(-1);
 				socket.setSoTimeout((int) timeout);
 			}
 		}
