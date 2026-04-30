@@ -263,6 +263,7 @@ public class TCPend {
 						dupAcks++;
 						statDuplicateAcks++;
 						if (dupAcks == 3) {
+							dupAcks = 0;
 							SenderSegment seg = segments.get(base);
 							TCPSegment rtx = new TCPSegment(seg.seqNum, 1, System.nanoTime(), seg.data.length,
 									false, true, false, (short) 0, seg.data);
